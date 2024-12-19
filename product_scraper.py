@@ -1,10 +1,13 @@
 import os
 import time
-import undetected_chromedriver as uc
+import tempfile
+import requests
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
+import undetected_chromedriver as uc
+
 
 class ProductScraper:
     def __init__(self, base_url, headless=True):
@@ -12,6 +15,7 @@ class ProductScraper:
         self.headless = headless  # Whether to run Chrome in headless mode
         self.driver = self.init_driver()
         self.product_links = set()  # Store unique product links
+        self.products = []  # Store all scraped product details
     
     def init_driver(self):
         """
@@ -26,26 +30,31 @@ class ProductScraper:
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--start-maximized")
         options.add_argument("--window-size=1280,720")
-        options.add_argument("--disable-web-security")  # Disable CORS restrictions
+        options.add_argument("--disable-web-security")
         options.add_argument("--allow-running-insecure-content")
-        options.add_argument("--disable-blink-features=AutomationControlled")  # Bypass detection
+        options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--disable-gpu")
         driver = uc.Chrome(options=options)
         return driver
+
+    def escape_xpath_string(self, s):
+        if "'" in s and '"' in s:
+            return "concat(" + ", ".join(f"'{part}'" for part in s.split("'")) + ")"
+        if "'" in s:
+            return f'"{s}"'
+        return f"'{s}'"
 
     def scrape_product_links(self):
         """
         Scrape product links from all pages of the Shopify collection.
         """
         try:
-            next_page_url = self.base_url  # Start with the base URL
+            next_page_url = self.base_url
             
             while next_page_url:
                 self.driver.get(next_page_url)
-                print(f"Navigated to {next_page_url}")
-                
-                # Anti-scraping delay
-                time.sleep(2)
+                print(f"Navigated to next page")
+                time.sleep(2)  # Anti-scraping delay
                 
                 # Wait for the product grid to load
                 WebDriverWait(self.driver, 10).until(
@@ -61,26 +70,97 @@ class ProductScraper:
                     if href:
                         self.product_links.add(href)
                 
+                # Check for the "Next page" button
                 print(f"Accumulated {len(self.product_links)} unique product links so far.")
-                
-                # Anti-scraping delay before navigating to the next page
-                time.sleep(2)
-                
-                # Check for the "Next page" button and get its URL
                 try:
                     next_button = self.driver.find_element(
                         By.XPATH, '//a[contains(@class, "pagination__item--prev")]'
                     )
                     next_page_url = next_button.get_attribute("href")
-                except Exception:
+                except NoSuchElementException:
                     print("No more pages found.")
-                    next_page_url = None  # Exit the loop if there's no "Next" button
+                    next_page_url = None
         
         except TimeoutException:
             print("Failed to load product grid in time.")
         except Exception as e:
             print(f"An error occurred: {e}")
-    
+
+    def scrape_product_details(self, product_url):
+        """
+        Scrape details for a single product.
+        """
+        try:
+            self.driver.get(product_url)
+            time.sleep(2)  # Anti-scraping delay
+
+            # Product name
+            escaped_xpath = f"//h1[contains(@class, {self.escape_xpath_string('product__title')})]"
+            product_name = self.driver.find_element(By.XPATH, escaped_xpath).text
+            
+            # Product description
+            product_description = self.driver.find_element(
+                By.XPATH, '//div[contains(@class, "accordion__content rte")]/p'
+            ).text
+
+            # Current and former prices
+            current_price = self.driver.find_element(
+                By.XPATH, '//span[contains(@class, "price-item--sale")]'
+            ).text
+            former_price = self.driver.find_element(
+                By.XPATH, '//s[contains(@class, "price-item--regular")]'
+            ).text
+
+            # Sizes and availability
+            sizes = []
+            size_elements = self.driver.find_elements(
+                By.XPATH, '//fieldset[contains(@class, "js product-form__input")]//input'
+            )
+            for size_element in size_elements:
+                size_name = size_element.get_attribute("value")
+                is_available = "checked" in size_element.get_attribute("outerHTML")
+                sizes.append({"size": size_name, "in_stock": is_available})
+            
+            # Images
+            image_elements = self.driver.find_elements(
+                By.XPATH, '//ul[contains(@id, "Slider-Thumbnails")]//img'
+            )
+            image_urls = [img.get_attribute("src") for img in image_elements]
+            image_paths = self.save_images(image_urls)
+
+            # Store product details
+            self.products.append({
+                "name": product_name,
+                "description": product_description,
+                "current_price": current_price,
+                "former_price": former_price,
+                "sizes": sizes,
+                "images": image_paths
+            })
+
+            print(self.products)
+
+        except Exception as e:
+            print(f"An error occurred while scraping {product_url}: {e}")
+
+    def save_images(self, image_urls):
+        """
+        Save images from the given URLs to a temporary directory.
+        """
+        temp_dir = tempfile.mkdtemp()
+        image_paths = []
+        for idx, image_url in enumerate(image_urls, 1):
+            try:
+                response = requests.get(image_url, stream=True)
+                if response.status_code == 200:
+                    image_path = os.path.join(temp_dir, f"image_{idx}.jpg")
+                    with open(image_path, "wb") as file:
+                        file.write(response.content)
+                    image_paths.append(image_path)
+            except Exception as e:
+                print(f"Failed to save image {image_url}: {e}")
+        return image_paths
+
     def close(self):
         """
         Close the WebDriver instance.
@@ -89,16 +169,20 @@ class ProductScraper:
             self.driver.quit()
             print("WebDriver closed.")
 
+
 if __name__ == "__main__":
-    # Shopify collection URL
     base_url = "https://www.flizzone.com/collections/men?filter.v.availability=1&page=1&sort_by=best-selling"
     
     # Initialize scraper
     scraper = ProductScraper(base_url=base_url, headless=True)
     
     try:
-        # Scrape product links
+        # Step 1: Scrape all product links
         scraper.scrape_product_links()
+
+        # Step 2: Scrape details for each product
+        for product_link in scraper.product_links:
+            scraper.scrape_product_details(product_link)
 
     finally:
         # Cleanup
