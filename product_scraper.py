@@ -72,14 +72,15 @@ class ProductScraper:
                 
                 # Check for the "Next page" button
                 print(f"Accumulated {len(self.product_links)} unique product links so far.")
-                try:
-                    next_button = self.driver.find_element(
-                        By.XPATH, '//a[contains(@class, "pagination__item--prev")]'
-                    )
-                    next_page_url = next_button.get_attribute("href")
-                except NoSuchElementException:
-                    print("No more pages found.")
-                    next_page_url = None
+                next_page_url = None
+                # try:
+                #     next_button = self.driver.find_element(
+                #         By.XPATH, '//a[contains(@class, "pagination__item--prev")]'
+                #     )
+                #     next_page_url = next_button.get_attribute("href")
+                # except NoSuchElementException:
+                #     print("No more pages found.")
+                #     next_page_url = None
         
         except TimeoutException:
             print("Failed to load product grid in time.")
@@ -95,13 +96,18 @@ class ProductScraper:
             time.sleep(2)  # Anti-scraping delay
 
             # Product name
-            escaped_xpath = f"//h1[contains(@class, {self.escape_xpath_string('product__title')})]"
-            product_name = self.driver.find_element(By.XPATH, escaped_xpath).text
-            
+            product_name_element = WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'product__title')]/h1"))
+            )
+            product_name = product_name_element.text
+
             # Product description
-            product_description = self.driver.find_element(
-                By.XPATH, '//div[contains(@class, "accordion__content rte")]/p'
-            ).text
+            product_description_element = WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located(
+                    (By.XPATH, '(//div[contains(@class, "accordion__content rte")]/p/span[contains(@class, "metafield-multi_line_text_field")])[1]')
+                )
+            )
+            product_description = product_description_element.get_attribute('innerHTML').strip()
 
             # Current and former prices
             current_price = self.driver.find_element(
