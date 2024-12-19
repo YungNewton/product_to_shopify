@@ -1,4 +1,5 @@
 import os
+import time
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -43,6 +44,9 @@ class ProductScraper:
                 self.driver.get(next_page_url)
                 print(f"Navigated to {next_page_url}")
                 
+                # Anti-scraping delay
+                time.sleep(2)
+                
                 # Wait for the product grid to load
                 WebDriverWait(self.driver, 10).until(
                     EC.presence_of_element_located((By.ID, "product-grid"))
@@ -58,6 +62,9 @@ class ProductScraper:
                         self.product_links.add(href)
                 
                 print(f"Accumulated {len(self.product_links)} unique product links so far.")
+                
+                # Anti-scraping delay before navigating to the next page
+                time.sleep(2)
                 
                 # Check for the "Next page" button and get its URL
                 try:
